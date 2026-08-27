@@ -41,11 +41,32 @@ def run(args) -> None:
     frames_root = raw / "frame_dataset_v3" / "frame_dataset_v3"
     out_root = PROJECT_ROOT / "data" / "processed"
 
+    # Load all splits first so we can enforce video-level disjointness.
+    # The Kaggle mirror's provided splits LEAK videos across train/val/test
+    # (124 videos in train∩val, 78 in train∩test), which inflates metrics.
+    # We treat val and test videos as sacred and drop them from train.
+    frames = {}
+    for split in ["train", "val", "test"]:
+        frames[split] = pd.read_csv(raw / f"{split}_labels.csv")
+
+    def vid_key(row) -> str:
+        return f"{row['source']}_{row['video']}"
+
+    val_vids = {vid_key(r) for _, r in frames["val"].iterrows()}
+    test_vids = {vid_key(r) for _, r in frames["test"].iterrows()}
+    held_out = val_vids | test_vids
+
+    before = len(frames["train"])
+    frames["train"] = frames["train"][
+        ~frames["train"].apply(lambda r: vid_key(r) in held_out, axis=1)
+    ]
+    print(f"[prepare] removed {before - len(frames['train'])} leaked train rows "
+          f"({len(held_out)} held-out videos)")
+
     manifest = {}
     total = 0
     for split in ["train", "val", "test"]:
-        csv = raw / f"{split}_labels.csv"
-        df = pd.read_csv(csv)
+        df = frames[split]
         for _, row in df.iterrows():
             fname = Path(str(row["filepath"])).name
             src = frames_root / ("fake" if row["label"] == 1 else "real") / fname
