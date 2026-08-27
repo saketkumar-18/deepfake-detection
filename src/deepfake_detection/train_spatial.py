@@ -96,6 +96,22 @@ def train(cfg: dict, args) -> dict:
         train_samples = train_samples[: args.limit]
         val_samples = val_samples[: max(64, args.limit // 5)]
 
+    if args.balance:
+        # cap each class to N frames (keeps fine-tune epochs tractable on CPU)
+        import random as _rnd
+
+        _rng = _rnd.Random(cfg["train"]["seed"])
+        by_lab = {0: [], 1: []}
+        for s in train_samples:
+            by_lab[s.label].append(s)
+        capped = []
+        for lab in (0, 1):
+            group = by_lab[lab]
+            _rng.shuffle(group)
+            capped.extend(group[: args.balance])
+        _rng.shuffle(capped)
+        train_samples = capped
+
     train_vids = len({s.video_id for s in train_samples})
     val_vids = len({s.video_id for s in val_samples})
     print(f"[spatial] train frames={len(train_samples)} val frames={len(val_samples)} "
@@ -120,6 +136,10 @@ def train(cfg: dict, args) -> dict:
         num_classes=cfg["model"]["num_classes"],
         drop_rate=cfg["model"]["drop_rate"],
     ).to(device)
+    if args.resume and Path(args.resume).exists():
+        ck = torch.load(args.resume, map_location=device)
+        model.load_state_dict(ck["model"])
+        print(f"[spatial] resumed weights from {args.resume} (val_auc={ck.get('val_auc')})")
     criterion = nn.BCEWithLogitsLoss()
 
     epochs = args.epochs if args.epochs else cfg["train"]["epochs_finetune"]
@@ -130,7 +150,9 @@ def train(cfg: dict, args) -> dict:
 
     for epoch in range(1, epochs + 1):
         # phase 1: head only (backbone frozen, no grads); phase 2+: full fine-tune
-        if epoch == 1:
+        # --finetune-only skips the head phase entirely (used with --resume)
+        head_phase = (epoch == 1) and not args.finetune_only
+        if head_phase:
             for p in model.net.parameters():
                 p.requires_grad = False
             params = model.param_groups(0.0, cfg["train"]["lr_head"], cfg["train"]["weight_decay"])
@@ -144,6 +166,9 @@ def train(cfg: dict, args) -> dict:
         t0 = time.time()
         running = 0.0
         for step, (imgs, labels, _g, _v) in enumerate(train_loader):
+            if args.max_steps and step >= args.max_steps:
+                print(f"  epoch {epoch} hit max_steps={args.max_steps}, stopping epoch")
+                break
             imgs = imgs.to(device)
             y = labels.to(device, dtype=torch.float32)
             opt.zero_grad(set_to_none=True)
@@ -154,7 +179,7 @@ def train(cfg: dict, args) -> dict:
             running += loss.item()
             if step % 20 == 0:
                 print(f"  epoch {epoch} step {step}/{len(train_loader)} loss={loss.item():.4f}")
-        train_loss = running / max(len(train_loader), 1)
+        train_loss = running / max(step + 1, 1)
 
         overall, per_gen = evaluate(model, val_loader, device)
         dt = time.time() - t0
@@ -194,6 +219,10 @@ def main():
     ap.add_argument("--data-root", default=None)
     ap.add_argument("--epochs", type=int, default=None)
     ap.add_argument("--limit", type=int, default=None, help="cap train frames (smoke test)")
+    ap.add_argument("--balance", type=int, default=None, help="cap frames PER CLASS (balanced subset)")
+    ap.add_argument("--max-steps", type=int, default=None, help="cap optimizer steps per epoch")
+    ap.add_argument("--resume", default=None, help="resume model weights from checkpoint")
+    ap.add_argument("--finetune-only", action="store_true", help="skip head-only phase (use with --resume)")
     args = ap.parse_args()
     cfg = load_config(args.config)
     train(cfg, args)

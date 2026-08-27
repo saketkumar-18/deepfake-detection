@@ -1,0 +1,12 @@
+[spatial] device=cpu
+[spatial] scanning frames under C:\Users\devil\Downloads\deepfake-detection\data\processed ...
+[spatial] train frames: 27964 (real=15925, fake=12039) val frames: 5490
+[spatial] train frames=10000 val frames=5490 (train vids=5170, val vids=1411)
+[spatial] resumed weights from checkpoints/spatial_effb0.pt (val_auc=0.7944963031010891)
+  epoch 1 step 0/312 loss=0.4733
+  epoch 1 step 20/312 loss=0.4995
+  epoch 1 step 40/312 loss=0.5943
+  epoch 1 step 60/312 loss=0.5850
+  epoch 1 step 80/312 loss=0.5614
+  epoch 1 step 100/312 loss=0.5506
+  epoch 1 step 120/312 loss=0.5480

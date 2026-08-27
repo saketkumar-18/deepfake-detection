@@ -10,7 +10,7 @@ data:
   img_size: 160             # 160px ~2x faster than 224 on CPU, minor AUC cost
   frames_per_video: 16
   batch_size: 32
-  workers: 4
+  workers: 2
 
 train:
   epochs_head: 1

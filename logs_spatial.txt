@@ -49,3 +49,10 @@
 [spatial] epoch 1 loss=0.6146 val_auc=0.7945 val_acc=0.7257 (2028.1s)
 [spatial] saved best ckpt -> C:\Users\devil\Downloads\deepfake-detection\checkpoints\spatial_effb0.pt (auc=0.7945)
   epoch 2 step 0/873 loss=0.6286
+  epoch 2 step 20/873 loss=0.7127
+  epoch 2 step 40/873 loss=0.4308
+  epoch 2 step 60/873 loss=0.5830
+  epoch 2 step 80/873 loss=0.6027
+  epoch 2 step 100/873 loss=0.6622
+  epoch 2 step 120/873 loss=0.5604
+  epoch 2 step 140/873 loss=0.4668
