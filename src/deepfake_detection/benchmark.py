@@ -65,23 +65,29 @@ def run(args) -> dict:
     spatial_ckpt = PROJECT_ROOT / "checkpoints" / "spatial_effb0.pt"
     temporal_ckpt = PROJECT_ROOT / "checkpoints" / "temporal_transformer.pt"
 
-    items = load_cached(cache_dir)
-    if not items:
-        raise SystemExit(f"No embeddings in {cache_dir}; run train_temporal embed first.")
+    max_frames = getattr(args, "max_frames", None) if args else None
+    split = getattr(args, "split", "test") if args else "test"
 
-    # deterministic stratified val split identical to training
-    import random
+    # Use the official held-out split with the same length-control protocol as
+    # training, so benchmark numbers are honest and comparable.
+    val_items = load_cached(cache_dir, split=split, max_frames=max_frames)
+    if not val_items:
+        # fall back to stratified random split if no split info cached
+        items = load_cached(cache_dir, max_frames=max_frames)
+        if not items:
+            raise SystemExit(f"No embeddings in {cache_dir}; run train_temporal embed first.")
+        import random
 
-    rng = random.Random(42)
-    by_label: dict[int, list] = {0: [], 1: []}
-    for it in items:
-        by_label[it["label"]].append(it)
-    val_items: list = []
-    for lab, group in by_label.items():
-        rng.shuffle(group)
-        n_val = max(1, int(len(group) * 0.15))
-        val_items.extend(group[:n_val])
-    rng.shuffle(val_items)
+        rng = random.Random(42)
+        by_label: dict[int, list] = {0: [], 1: []}
+        for it in items:
+            by_label[it["label"]].append(it)
+        val_items = []
+        for lab, group in by_label.items():
+            rng.shuffle(group)
+            n_val = max(1, int(len(group) * 0.15))
+            val_items.extend(group[:n_val])
+        rng.shuffle(val_items)
     in_dim = val_items[0]["emb"].shape[1]
     loader = DataLoader(EmbDataset(val_items), batch_size=32, shuffle=False, collate_fn=collate_emb)
 
@@ -92,21 +98,22 @@ def run(args) -> dict:
         spatial = load_spatial(spatial_ckpt).to(device).eval()
         agg = {"mean": [], "max": [], "topk": []}
         labels_all, gens_all = [], []
-        for x, y, mask, g, _v in loader:
-            x = x.to(device)
-            b, t, d = x.shape
-            flat = x.reshape(b * t, d)
-            logits = spatial.head(flat).squeeze(-1)
-            probs = torch.sigmoid(logits).reshape(b, t).cpu().numpy()
-            m = mask.numpy()
-            for i in range(b):
-                p = probs[i][m[i]]
-                k = max(1, len(p) // 4)
-                agg["mean"].append(float(p.mean()))
-                agg["max"].append(float(p.max()))
-                agg["topk"].append(float(np.sort(p)[-k:].mean()))
-            labels_all.extend(y.tolist())
-            gens_all.extend(g)
+        with torch.no_grad():
+            for x, y, mask, g, _v in loader:
+                x = x.to(device)
+                b, t, d = x.shape
+                flat = x.reshape(b * t, d)
+                logits = spatial.head(flat).squeeze(-1)
+                probs = torch.sigmoid(logits).reshape(b, t).cpu().numpy()
+                m = mask.numpy()
+                for i in range(b):
+                    p = probs[i][m[i]]
+                    k = max(1, len(p) // 4)
+                    agg["mean"].append(float(p.mean()))
+                    agg["max"].append(float(p.max()))
+                    agg["topk"].append(float(np.sort(p)[-k:].mean()))
+                labels_all.extend(y.tolist())
+                gens_all.extend(g)
         for name, scs in agg.items():
             results[f"spatial_agg_{name}"] = binary_metrics(labels_all, scs)
         results["spatial_agg_mean_per_gen"] = per_generator_metrics(labels_all, agg["mean"], gens_all)
@@ -120,7 +127,8 @@ def run(args) -> dict:
 
     # --- markdown table ---
     lines = ["# Benchmark: Deepfake Video Detection\n",
-             f"Validation videos: {len(val_items)} | device: {device}\n",
+             f"Held-out {split} videos: {len(val_items)} | device: {device}"
+             + (f" | length-control T={max_frames}" if max_frames else "") + "\n",
              "| Model / aggregation | Video AUC | AP | Acc |",
              "|---|---|---|---|"]
     order = ["spatial_agg_mean", "spatial_agg_max", "spatial_agg_topk", "temporal_transformer"]
@@ -148,8 +156,11 @@ def run(args) -> dict:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.parse_args()
-    run(None)
+    ap.add_argument("--split", default="test", help="which cached split to benchmark on")
+    ap.add_argument("--max-frames", type=int, default=None,
+                    help="length-control: subsample every clip to exactly T frames")
+    args = ap.parse_args()
+    run(args)
 
 
 if __name__ == "__main__":

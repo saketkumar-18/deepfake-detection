@@ -96,26 +96,44 @@ def embed_all(cfg: dict, args) -> None:
     print(f"[embed] done: {done} videos cached -> {cache_dir}")
 
 
-def load_cached(cache_dir: Path, split: str | None = None):
-    """Load cached embeddings, optionally filtered to one split. Returns list of dicts."""
+def load_cached(cache_dir: Path, split: str | None = None, max_frames: int | None = None):
+    """Load cached embeddings, optionally filtered to one split. Returns list of dicts.
+
+    max_frames: length-control protocol. When set, every clip is subsampled to
+    exactly `max_frames` evenly-spaced frames and clips with fewer frames are
+    dropped. This removes the frame-count shortcut (real vs fake clips in some
+    mirrors have systematically different lengths, letting a model 'count
+    frames' instead of learning artifacts).
+    """
     items = []
+    dropped = 0
     for f in sorted(cache_dir.glob("*.npz")):
         d = np.load(f, allow_pickle=True)
         fsplit = str(d["split"]) if "split" in d.files else "all"
         if split is not None and fsplit != split:
             continue
+        emb = d["emb"].astype(np.float32)
+        if max_frames is not None:
+            if emb.shape[0] < max_frames:
+                dropped += 1
+                continue
+            if emb.shape[0] > max_frames:
+                idx = np.linspace(0, emb.shape[0] - 1, max_frames).round().astype(int)
+                emb = emb[idx]
         vid = f.stem
         if "__" in vid:
             vid = vid.split("__", 1)[1]
         items.append(
             {
                 "video_id": vid,
-                "emb": d["emb"].astype(np.float32),
+                "emb": emb,
                 "label": int(d["label"]),
                 "generator": str(d["generator"]),
                 "split": fsplit,
             }
         )
+    if max_frames is not None and dropped:
+        print(f"[temporal] length-control T={max_frames}: dropped {dropped} clips shorter than T")
     return items
 
 
@@ -160,8 +178,11 @@ def train_temporal(cfg: dict, args) -> dict:
     set_seed(cfg["train"]["seed"])
     device = get_device()
     cache_dir = resolve_path(cfg, "embed", "cache_dir")
-    train_items = load_cached(cache_dir, split="train")
-    val_items = load_cached(cache_dir, split="val")
+    max_frames = args.max_frames if args.max_frames is not None else cfg["train"].get("max_frames")
+    if max_frames:
+        print(f"[temporal] LENGTH-CONTROL PROTOCOL: all clips subsampled to T={max_frames} frames")
+    train_items = load_cached(cache_dir, split="train", max_frames=max_frames)
+    val_items = load_cached(cache_dir, split="val", max_frames=max_frames)
     if not train_items:
         # no split info cached: fall back to stratified random split of everything
         items = load_cached(cache_dir)
@@ -181,6 +202,20 @@ def train_temporal(cfg: dict, args) -> dict:
             train_items.extend(group[n_val:])
     n_real = sum(1 for i in train_items if i["label"] == 0)
     print(f"[temporal] train={len(train_items)} videos (real={n_real}) val={len(val_items)}")
+
+    # length-shortcut diagnostic: if mean clip length differs >2x between
+    # classes, a raw-length model can score near-perfect by counting frames.
+    if max_frames is None:
+        import numpy as _np
+
+        lens = {0: [], 1: []}
+        for it in train_items + val_items:
+            lens[it["label"]].append(it["emb"].shape[0])
+        m0 = _np.mean(lens[0]) if lens[0] else 0
+        m1 = _np.mean(lens[1]) if lens[1] else 0
+        if m0 > 0 and m1 > 0 and (max(m0, m1) / max(min(m0, m1), 1e-9)) > 2.0:
+            print(f"[temporal] WARNING: length shortcut detected — mean frames real={m0:.1f} fake={m1:.1f}. "
+                  f"Re-run with --max-frames T for an honest protocol.")
 
     in_dim = train_items[0]["emb"].shape[1]
     print(f"[temporal] train={len(train_items)} val={len(val_items)} in_dim={in_dim}")
@@ -249,6 +284,8 @@ def main():
     ap.add_argument("--config", default="configs/temporal.yaml")
     ap.add_argument("--data-root", default=None)
     ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--max-frames", type=int, default=None,
+                    help="length-control: subsample every clip to exactly T frames (drops shorter clips)")
     args = ap.parse_args()
     cfg = load_config(args.config)
     if args.stage == "embed":
