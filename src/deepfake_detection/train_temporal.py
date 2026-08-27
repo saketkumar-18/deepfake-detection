@@ -48,10 +48,18 @@ def embed_all(cfg: dict, args) -> None:
     spatial = load_spatial(spatial_ckpt).to(device).eval()
 
     print(f"[embed] scanning {data_root}")
-    samples = scan_frame_tree(data_root)
+    from .dataset import load_split
+
     frames_per_video = cfg["embed"]["frames_per_video"]
-    clips = group_videos(samples, frames_per_video)
-    print(f"[embed] {len(clips)} videos")
+    # embed each official split separately so we can reuse the split at train time
+    split_names = [s for s in ("train", "val", "test") if (data_root / s).is_dir()] or [None]
+    clips = []
+    for split in split_names:
+        samples = load_split(data_root, split) if split else scan_frame_tree(data_root)
+        for c in group_videos(samples, frames_per_video):
+            c.split = split or "all"
+            clips.append(c)
+    print(f"[embed] {len(clips)} videos across splits {split_names}")
 
     img_size = spatial_ckpt and torch.load(spatial_ckpt, map_location="cpu")["config"].get("img_size", 224)
     transform = build_eval_transform(img_size)
@@ -59,7 +67,7 @@ def embed_all(cfg: dict, args) -> None:
     done = 0
     t0 = time.time()
     for clip in clips:
-        out = cache_dir / f"{clip.video_id}.npz"
+        out = cache_dir / f"{clip.split}__{clip.video_id}.npz"
         if out.exists() and not args.overwrite:
             done += 1
             continue
@@ -81,24 +89,31 @@ def embed_all(cfg: dict, args) -> None:
         for i in range(0, x.shape[0], 32):
             feats.append(spatial.forward_features(x[i : i + 32]).cpu())
         emb = torch.cat(feats, 0).numpy().astype(np.float16)
-        np.savez_compressed(out, emb=emb, label=clip.label, generator=clip.generator)
+        np.savez_compressed(out, emb=emb, label=clip.label, generator=clip.generator, split=clip.split)
         done += 1
         if done % 50 == 0:
             print(f"  embedded {done}/{len(clips)} ({time.time() - t0:.0f}s)")
     print(f"[embed] done: {done} videos cached -> {cache_dir}")
 
 
-def load_cached(cache_dir: Path):
-    """Load all cached embeddings. Returns list of dicts."""
+def load_cached(cache_dir: Path, split: str | None = None):
+    """Load cached embeddings, optionally filtered to one split. Returns list of dicts."""
     items = []
     for f in sorted(cache_dir.glob("*.npz")):
         d = np.load(f, allow_pickle=True)
+        fsplit = str(d["split"]) if "split" in d.files else "all"
+        if split is not None and fsplit != split:
+            continue
+        vid = f.stem
+        if "__" in vid:
+            vid = vid.split("__", 1)[1]
         items.append(
             {
-                "video_id": f.stem,
+                "video_id": vid,
                 "emb": d["emb"].astype(np.float32),
                 "label": int(d["label"]),
                 "generator": str(d["generator"]),
+                "split": fsplit,
             }
         )
     return items
@@ -145,28 +160,27 @@ def train_temporal(cfg: dict, args) -> dict:
     set_seed(cfg["train"]["seed"])
     device = get_device()
     cache_dir = resolve_path(cfg, "embed", "cache_dir")
-    items = load_cached(cache_dir)
-    if not items:
-        raise SystemExit(f"No cached embeddings in {cache_dir}. Run 'embed' first.")
-    n_real = sum(1 for i in items if i["label"] == 0)
-    print(f"[temporal] {len(items)} videos (real={n_real}, fake={len(items) - n_real})")
+    train_items = load_cached(cache_dir, split="train")
+    val_items = load_cached(cache_dir, split="val")
+    if not train_items:
+        # no split info cached: fall back to stratified random split of everything
+        items = load_cached(cache_dir)
+        if not items:
+            raise SystemExit(f"No cached embeddings in {cache_dir}. Run 'embed' first.")
+        import random
 
-    import random
-
-    rng = random.Random(cfg["train"]["seed"])
-    # stratified video-level split so val always has both classes
-    by_label: dict[int, list] = {0: [], 1: []}
-    for it in items:
-        by_label[it["label"]].append(it)
-    val_items: list = []
-    train_items: list = []
-    for lab, group in by_label.items():
-        rng.shuffle(group)
-        n_val = max(1, int(len(group) * 0.15))
-        val_items.extend(group[:n_val])
-        train_items.extend(group[n_val:])
-    rng.shuffle(train_items)
-    rng.shuffle(val_items)
+        rng = random.Random(cfg["train"]["seed"])
+        by_label: dict[int, list] = {0: [], 1: []}
+        for it in items:
+            by_label[it["label"]].append(it)
+        val_items, train_items = [], []
+        for lab, group in by_label.items():
+            rng.shuffle(group)
+            n_val = max(1, int(len(group) * 0.15))
+            val_items.extend(group[:n_val])
+            train_items.extend(group[n_val:])
+    n_real = sum(1 for i in train_items if i["label"] == 0)
+    print(f"[temporal] train={len(train_items)} videos (real={n_real}) val={len(val_items)}")
 
     in_dim = train_items[0]["emb"].shape[1]
     print(f"[temporal] train={len(train_items)} val={len(val_items)} in_dim={in_dim}")

@@ -62,39 +62,44 @@ def train(cfg: dict, args) -> dict:
     img_size = cfg["data"]["img_size"]
 
     print(f"[spatial] scanning frames under {data_root} ...")
-    samples = scan_frame_tree(data_root)
-    n_real = sum(1 for s in samples if s.label == 0)
-    n_fake = len(samples) - n_real
-    print(f"[spatial] frames: {len(samples)} (real={n_real}, fake={n_fake})")
-    if not samples:
+    from .dataset import load_split
+
+    train_samples = load_split(data_root, "train")
+    val_samples = load_split(data_root, "val")
+    if not train_samples:
+        # no official splits: fall back to scanning everything + random split
+        samples = scan_frame_tree(data_root)
+        import random
+
+        rng = random.Random(cfg["train"]["seed"])
+        vids_by_label: dict[int, list[str]] = {0: [], 1: []}
+        vid_label = {}
+        for s in samples:
+            if s.video_id not in vid_label:
+                vid_label[s.video_id] = s.label
+                vids_by_label[s.label].append(s.video_id)
+        val_vids = set()
+        for lab, vids in vids_by_label.items():
+            rng.shuffle(vids)
+            n_v = max(1, int(len(vids) * 0.15))
+            val_vids.update(vids[:n_v])
+        train_samples = [s for s in samples if s.video_id not in val_vids]
+        val_samples = [s for s in samples if s.video_id in val_vids]
+    n_real = sum(1 for s in train_samples if s.label == 0)
+    n_fake = sum(1 for s in train_samples if s.label == 1)
+    print(f"[spatial] train frames: {len(train_samples)} (real={n_real}, fake={n_fake}) "
+          f"val frames: {len(val_samples)}")
+    if not train_samples:
         raise SystemExit(f"No frames found under {data_root}. Run preprocessing first.")
-
-    # video-level split to avoid identity/frame leakage — stratified by class
-    import random
-
-    rng = random.Random(cfg["train"]["seed"])
-    vids_by_label: dict[int, list[str]] = {0: [], 1: []}
-    vid_label = {}
-    for s in samples:
-        if s.video_id not in vid_label:
-            vid_label[s.video_id] = s.label
-            vids_by_label[s.label].append(s.video_id)
-    val_vids = set()
-    for lab, vids in vids_by_label.items():
-        rng.shuffle(vids)
-        n_val = max(1, int(len(vids) * 0.15))
-        val_vids.update(vids[:n_val])
-    train_samples = [s for s in samples if s.video_id not in val_vids]
-    val_samples = [s for s in samples if s.video_id in val_vids]
-    n_val = len(val_vids)
-    vids = sorted(vid_label)
 
     if args.limit:
         train_samples = train_samples[: args.limit]
         val_samples = val_samples[: max(64, args.limit // 5)]
 
+    train_vids = len({s.video_id for s in train_samples})
+    val_vids = len({s.video_id for s in val_samples})
     print(f"[spatial] train frames={len(train_samples)} val frames={len(val_samples)} "
-          f"(train vids={len(vids) - n_val}, val vids={n_val})")
+          f"(train vids={train_vids}, val vids={val_vids})")
 
     train_ds = FrameDataset(train_samples, build_train_transform(img_size))
     val_ds = FrameDataset(val_samples, build_eval_transform(img_size))
@@ -124,10 +129,14 @@ def train(cfg: dict, args) -> dict:
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
 
     for epoch in range(1, epochs + 1):
-        # phase 1: head only; phase 2+: full fine-tune
+        # phase 1: head only (backbone frozen, no grads); phase 2+: full fine-tune
         if epoch == 1:
+            for p in model.net.parameters():
+                p.requires_grad = False
             params = model.param_groups(0.0, cfg["train"]["lr_head"], cfg["train"]["weight_decay"])
         else:
+            for p in model.net.parameters():
+                p.requires_grad = True
             params = model.param_groups(cfg["train"]["lr_finetune"], cfg["train"]["lr_finetune"], cfg["train"]["weight_decay"])
         opt = torch.optim.AdamW(params)
 

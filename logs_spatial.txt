@@ -1,0 +1,4 @@
+[spatial] device=cpu
+[spatial] scanning frames under C:\Users\devil\Downloads\deepfake-detection\data\processed ...
+[spatial] train frames: 27964 (real=15925, fake=12039) val frames: 5490
+[spatial] train frames=27964 val frames=5490 (train vids=6953, val vids=1411)

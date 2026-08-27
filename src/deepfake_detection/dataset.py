@@ -72,6 +72,18 @@ class FrameSample:
     frame_idx: int = 0
 
 
+def load_split(root: Path, split: str) -> list[FrameSample]:
+    """Load one official split from <root>/<split>/{real,fake,...} layout.
+
+    Falls back to scanning the whole root if the split dir doesn't exist.
+    """
+    root = Path(root)
+    split_dir = root / split
+    if split_dir.is_dir():
+        return scan_frame_tree(split_dir)
+    return scan_frame_tree(root)
+
+
 def scan_frame_tree(
     root: Path,
     class_map: dict[str, int] | None = None,
@@ -102,6 +114,12 @@ def scan_frame_tree(
                 continue
             parsed = parse_frame_name(img.name)
             vid, fidx = parsed if parsed else (img.stem, 0)
+            # recover source/generator tag from filename prefix when generic
+            if gen == "fake":
+                if vid.startswith("celeb_fake"):
+                    gen = "CelebDF"
+                elif vid.startswith("ffpp_fake"):
+                    gen = "FF++"
             samples.append(FrameSample(img, label, vid, gen, fidx))
     return samples
 
@@ -150,6 +168,7 @@ class VideoClip:
     label: int
     generator: str
     frames: list[Path] = field(default_factory=list)
+    split: str = "all"
 
 
 def group_videos(samples: list[FrameSample], frames_per_video: int = 16) -> list[VideoClip]:

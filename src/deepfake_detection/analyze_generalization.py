@@ -67,14 +67,25 @@ def run(cfg: dict, args) -> dict:
     if not real_samples:
         raise SystemExit("No 'real' frames found; cannot compute AUC.")
 
+    # source-aware real pools (filename prefixes from prepare_data)
+    celeb_reals = [s for s in real_samples if s.video_id.startswith("celeb_real")]
+    ffpp_reals = [s for s in real_samples if s.video_id.startswith("ffpp_real")]
+
     max_frames = args.max_frames
     results = {}
     for gen, gen_samples in sorted(by_gen.items()):
         if gen == "real":
             continue
+        # match real pool to the generator's source when possible
+        if gen == "CelebDF" and celeb_reals:
+            reals_pool = celeb_reals
+        elif gen in ("FF++", "Deepfakes", "Face2Face", "FaceSwap", "NeuralTextures", "FaceShifter") and ffpp_reals:
+            reals_pool = ffpp_reals
+        else:
+            reals_pool = real_samples
         # subsample for speed
         pool = gen_samples[:max_frames]
-        reals = real_samples[: max_frames]
+        reals = reals_pool[:max_frames]
         eval_samples = pool + reals
         ds = FrameDataset(eval_samples, transform)
         loader = DataLoader(ds, batch_size=cfg["eval"]["batch_size"], shuffle=False, num_workers=2)

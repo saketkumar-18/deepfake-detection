@@ -1,4 +1,4 @@
-# Spatial detector: EfficientNet-B0 on face crops
+# Spatial detector: EfficientNet-B0 on face crops (CPU-tuned)
 model:
   backbone: efficientnet_b0
   pretrained: true
@@ -7,15 +7,14 @@ model:
 
 data:
   processed_root: data/processed
-  img_size: 224
+  img_size: 160             # 160px ~2x faster than 224 on CPU, minor AUC cost
   frames_per_video: 16
-  train_videos_per_class: 250   # cap for CPU budget (real is scarce: 590 total)
   batch_size: 32
   workers: 4
 
 train:
   epochs_head: 1
-  epochs_finetune: 3
+  epochs_finetune: 2        # head epoch + 2 full fine-tune epochs
   lr_head: 1.0e-3
   lr_finetune: 3.0e-5
   weight_decay: 1.0e-4
