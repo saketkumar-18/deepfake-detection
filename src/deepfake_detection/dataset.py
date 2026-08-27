@@ -115,12 +115,13 @@ def scan_frame_tree(
             parsed = parse_frame_name(img.name)
             vid, fidx = parsed if parsed else (img.stem, 0)
             # recover source/generator tag from filename prefix when generic
-            if gen == "fake":
+            frame_gen = gen
+            if frame_gen == "fake":
                 if vid.startswith("celeb_fake"):
-                    gen = "CelebDF"
+                    frame_gen = "CelebDF"
                 elif vid.startswith("ffpp_fake"):
-                    gen = "FF++"
-            samples.append(FrameSample(img, label, vid, gen, fidx))
+                    frame_gen = "FF++"
+            samples.append(FrameSample(img, label, vid, frame_gen, fidx))
     return samples
 
 

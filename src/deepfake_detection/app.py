@@ -7,6 +7,7 @@ Then open http://127.0.0.1:7860
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import gradio as gr
@@ -14,8 +15,8 @@ import gradio as gr
 from .config import PROJECT_ROOT
 from .inference import DeepfakeVideoDetector
 
-SPATIAL = PROJECT_ROOT / "checkpoints" / "spatial_effb0.pt"
-TEMPORAL = PROJECT_ROOT / "checkpoints" / "temporal_transformer.pt"
+SPATIAL = Path(os.environ.get("DFD_SPATIAL_CKPT") or "") or PROJECT_ROOT / "checkpoints" / "spatial_effb0.pt"
+TEMPORAL = Path(os.environ.get("DFD_TEMPORAL_CKPT") or "") or PROJECT_ROOT / "checkpoints" / "temporal_transformer.pt"
 
 _detector: DeepfakeVideoDetector | None = None
 

@@ -55,8 +55,11 @@ def run(cfg: dict, args) -> dict:
     transform = build_eval_transform(img_size)
 
     data_root = Path(args.data_root) if args.data_root else resolve_path(cfg, "data", "processed_root")
-    samples = scan_frame_tree(data_root)
-    print(f"[generalization] {len(samples)} frames under {data_root}")
+    from .dataset import load_split
+
+    samples = load_split(data_root, args.split) if args.split else scan_frame_tree(data_root)
+    print(f"[generalization] {len(samples)} frames under {data_root}"
+          + (f"/{args.split}" if args.split else ""))
 
     # bucket frames by generator
     by_gen: dict[str, list] = defaultdict(list)
@@ -115,6 +118,7 @@ def main():
     ap.add_argument("--ckpt", default="checkpoints/spatial_effb0.pt")
     ap.add_argument("--data-root", default=None)
     ap.add_argument("--max-frames", type=int, default=2000, help="cap frames per generator for eval speed")
+    ap.add_argument("--split", default=None, help="optional split subdir to load (train/val/test)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     cfg = load_config(args.config)
