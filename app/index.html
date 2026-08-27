@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Deepfake Video Detector — On-Device Forensics</title>
+<meta name="description" content="Privacy-first deepfake video screening. An EfficientNet-B0 detector runs entirely in your browser via WebAssembly — your video never leaves your device.">
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🕵️</text></svg>">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark">◉</span>
+    <div>
+      <h1>Deepfake Detector</h1>
+      <p class="tagline">spatial CNN video forensics</p>
+    </div>
+  </div>
+  <div class="privacy-badge" id="privacyBadge" title="All inference runs locally in your browser via WebAssembly. No video is ever uploaded.">
+    <span class="dot"></span> 100% on-device · nothing uploaded
+  </div>
+</header>
+
+<main>
+  <section class="disclaimer" id="disclaimer">
+    <strong>Research tool, not legal proof.</strong>
+    This detector estimates manipulation probability from facial artifacts
+    (EfficientNet-B0 trained on FaceForensics++ + Celeb-DF v2, test video AUC 0.955).
+    Scores are forensic <em>cues</em> — cross-generator generalization degrades
+    (AUC 0.56–0.80 across pipelines). Never treat output as definitive evidence.
+  </section>
+
+  <!-- ============ UPLOAD ============ -->
+  <section class="card" id="uploadCard">
+    <div class="dropzone" id="dropzone">
+      <input type="file" id="fileInput" accept="video/*" hidden>
+      <div class="dz-inner">
+        <div class="dz-icon">🎬</div>
+        <p><strong>Drop a video here</strong> or click to browse</p>
+        <p class="dz-hint">Short clips (&lt;60s) with a visible face work best · MP4/WebM</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ MODEL LOAD STATUS ============ -->
+  <section class="card status-card" id="statusCard" hidden>
+    <div class="status-line">
+      <span class="spinner" id="spinner"></span>
+      <span id="statusText">Loading model…</span>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+  </section>
+
+  <!-- ============ ANALYSIS ============ -->
+  <section class="card" id="analysisCard" hidden>
+    <div class="analysis-grid">
+      <div class="video-pane">
+        <video id="videoEl" muted playsinline></video>
+        <canvas id="overlayCanvas"></canvas>
+      </div>
+      <div class="result-pane">
+        <div class="verdict" id="verdict">—</div>
+        <div class="score-block">
+          <div class="score-label">Fake probability</div>
+          <div class="score-value" id="scoreValue">—</div>
+          <div class="score-bar"><div class="score-fill" id="scoreFill"></div></div>
+        </div>
+        <div class="detail-rows" id="detailRows"></div>
+        <button class="btn-secondary" id="againBtn" hidden>Analyze another video</button>
+      </div>
+    </div>
+    <div class="frames-strip" id="framesStrip"></div>
+  </section>
+
+  <!-- ============ HOW IT WORKS ============ -->
+  <section class="card how-card">
+    <h2>How it works</h2>
+    <ol class="how-steps">
+      <li><strong>Sample</strong> — 16 evenly-spaced frames are decoded from your video.</li>
+      <li><strong>Detect</strong> — a BlazeFace model (MediaPipe, also on-device) locates the largest face in each frame.</li>
+      <li><strong>Score</strong> — each face crop runs through an EfficientNet-B0 detector (fp16 ONNX, 8&nbsp;MB) in WebAssembly.</li>
+      <li><strong>Aggregate</strong> — frame scores are mean-pooled into a video-level verdict (the aggregation that scored best in our benchmark: AUC 0.9553 vs 0.9456 for the temporal transformer).</li>
+    </ol>
+    <p class="how-note">
+      Model card &amp; benchmark: <a href="https://github.com/saketkumar-18/deepfake-detection" target="_blank" rel="noopener">github.com/saketkumar-18/deepfake-detection</a>
+    </p>
+  </section>
+</main>
+
+<footer>
+  <p>Research prototype · trained on FF++ (C23) + Celeb-DF v2 · MIT (code), research-use weights</p>
+</footer>
+
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

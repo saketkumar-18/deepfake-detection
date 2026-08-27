@@ -1,0 +1,37 @@
+{
+  "model": "EfficientNet-B0 spatial deepfake detector",
+  "input": {
+    "name": "image",
+    "shape": [
+      1,
+      3,
+      160,
+      160
+    ],
+    "dtype": "float32"
+  },
+  "output": {
+    "name": "fake_prob",
+    "range": [
+      0,
+      1
+    ]
+  },
+  "img_size": 160,
+  "normalization": {
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ]
+  },
+  "val_auc": 0.909957461678419,
+  "test_video_auc_spatial_mean": 0.9553,
+  "parity_max_abs_diff_fp16": 0.006470978260040283,
+  "license": "MIT (code); weights trained on FF++/Celeb-DF for research use"
+}
