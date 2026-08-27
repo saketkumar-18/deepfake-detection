@@ -11,3 +11,4 @@ reports/
 dist/
 build/
 logs_*.txt
+*.stackdump
