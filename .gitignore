@@ -10,3 +10,4 @@ reports/
 .pytest_cache/
 dist/
 build/
+logs_*.txt
