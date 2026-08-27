@@ -1,5 +1,7 @@
 # 🕵️ Deepfake Video Detection — Spatial-Temporal CNN/Transformer
 
+**Live demo (100% on-device, nothing uploaded):** https://deepfake-detector-amber.vercel.app
+
 **Production-ready deepfake video forensics**: an EfficientNet-B0 spatial detector
 scores individual frames, and a temporal transformer aggregates frame embeddings
 into a video-level verdict. Includes a cross-generator generalization study and
@@ -165,6 +167,21 @@ python -m deepfake_detection.app
 uvicorn deepfake_detection.api:app --port 8000
 # POST /predict with multipart video file
 ```
+
+### In-browser demo (static, on-device WASM)
+
+The `app/` folder is a zero-backend demo: MediaPipe BlazeFace finds faces and
+the EfficientNet-B0 detector runs as **fp16 ONNX in WebAssembly** (onnxruntime-web),
+so no video ever leaves the user's device. Deployed to Vercel as static files.
+
+```bash
+python -m deepfake_detection.export_onnx   # -> app/assets/model.fp16.onnx (8.1 MB)
+# parity verified: |ORT-web WASM - torch| max 4.85e-3, ~45 ms/frame
+```
+
+> int8 dynamic quantization was tested and **rejected**: it collapses
+> EfficientNet's SE blocks (frame AUC 0.97 → 0.55). fp16 halves the size with
+> no measurable accuracy loss.
 
 ## Tests
 
