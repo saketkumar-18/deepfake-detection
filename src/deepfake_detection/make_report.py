@@ -15,12 +15,14 @@ from pathlib import Path
 from .config import PROJECT_ROOT
 
 REPORTS = PROJECT_ROOT / "reports"
+CHECKPOINTS = PROJECT_ROOT / "checkpoints"
 
 
 def load(name: str) -> dict | None:
-    p = REPORTS / name
-    if p.exists():
-        return json.loads(p.read_text(encoding="utf-8"))
+    for root in (REPORTS, CHECKPOINTS):
+        p = root / name
+        if p.exists():
+            return json.loads(p.read_text(encoding="utf-8"))
     return None
 
 
@@ -34,7 +36,7 @@ def main() -> None:
     spatial = load("spatial_results.json")
     temporal = load("temporal_results.json")
     gen = load("generalization.json")
-    gen_test = load("generalization_test.json")
+    gen_test = load("generalization_generators.json")
     artifacts = load("artifacts.json")
     bench = load("benchmark.json")
 
@@ -42,6 +44,11 @@ def main() -> None:
     L.append("# Deepfake Video Detection — Experiment Report\n")
     L.append("Spatial-temporal CNN/Transformer forensics on FaceForensics++ (5 generators) "
              "and Celeb-DF v2 (held-out cross-dataset). CPU training (16-core, no GPU).\n")
+    L.append("> **Protocol integrity:** all numbers below use video-level-disjoint splits "
+             "(the Kaggle mirror's shipped splits leaked 124 val + 78 test videos into train; "
+             "1,044 leaked rows were removed) and the temporal model is length-controlled "
+             "(T=2 frames per clip — the raw data has a frame-count shortcut: real clips carry "
+             "12 frames, fakes 2–3, which alone yields a fake-perfect AUC of 1.0).\n")
 
     # ---- headline numbers
     L.append("## Headline results\n")
@@ -59,7 +66,8 @@ def main() -> None:
     # ---- cross-generator
     L.append("## Cross-generator generalization (frame AUC)\n")
     L.append("Research question: *which artifacts generalize across generators?*\n")
-    for title, data in [("Validation split", gen), ("Held-out TEST split", gen_test)]:
+    for title, data in [("Cross-source held-out test (Celeb-DF v2 vs FF++)", gen),
+                        ("Per-generator FF++ test (cross-preprocessing)", gen_test)]:
         if not data:
             continue
         L.append(f"### {title}\n")
