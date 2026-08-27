@@ -8,14 +8,65 @@ research question: *which manipulation artifacts generalize across generators?*
 
 ## Results
 
-| Model | Val AUC (video-level) | Notes |
-|---|---|---|
-| Spatial only (EfficientNet-B0, mean agg) | see `reports/` | frame detector |
-| Spatial + Temporal Transformer | see `reports/` | full pipeline |
+All numbers on a **video-level-disjoint held-out test split** (no identity/video
+leakage), CPU-only training.
 
-**Cross-generator generalization** (train on FF++ mix, per-generator test AUC):
-see `reports/generalization.json` — reports per-generator AUC including the
-held-out Celeb-DF v2 (different generator family, higher visual quality).
+| Model / aggregation | Test Video AUC | AP | Acc |
+|---|---|---|---|
+| Spatial (EfficientNet-B0), mean-pool | **0.9553** | 0.9838 | 0.9170 |
+| Spatial, max-pool | 0.9336 | 0.9764 | 0.8960 |
+| Spatial, top-k | 0.9336 | 0.9764 | 0.8960 |
+| **Spatial + Temporal Transformer** (T=2, length-controlled) | **0.9456** | 0.9768 | 0.8813 |
+
+Spatial detector alone: val AUC **0.9100** (head-only 0.7910 → fine-tune 0.8750 → 0.9100).
+Temporal transformer: val AUC **0.9367** under the length-control protocol.
+
+**Cross-source generalization** (one model, held-out test, per source):
+
+| Source | Test AUC | n |
+|---|---|---|
+| Celeb-DF v2 (out-of-distribution generator family) | 0.9220 | 3000 |
+| FaceForensics++ | 0.8928 | 1916 |
+| **Overall** | **0.9033** | 5486 |
+
+**Cross-preprocessing generalization** (FF++ frames from a *different* face-crop
+pipeline than training — the hard, realistic setting):
+
+| Generator | Test AUC | n |
+|---|---|---|
+| Deepfakes | 0.8011 | 1394 |
+| Face2Face | 0.6291 | 1399 |
+| NeuralTextures | 0.6220 | 1399 |
+| FaceShifter | 0.5955 | 1398 |
+| FaceSwap | 0.5629 | 1398 |
+| **Overall** | **0.6419** | 6988 |
+
+> **Key finding:** artifacts generalize well *within* a preprocessing pipeline
+> (AUC ≈ 0.90–0.96) but degrade sharply *across* pipelines/generators
+> (AUC ≈ 0.56–0.80). Swap-based forgeries (FaceSwap) leave the weakest
+> spectral/spatial cue; autoencoder-based (Deepfakes) the strongest.
+
+### Which artifacts generalize (FFT + Grad-CAM)
+
+- **Spectral divergence vs. real** (radial power spectrum, L1): FF++ fakes
+  deviate **2.3× more** than Celeb-DF fakes overall (L1 0.054 vs 0.024), driven
+  by the **high-frequency band** (0.025 vs 0.009) — the classic GAN/decoder
+  upsampling fingerprint. Mid-band is the most stable cue across sources.
+- **Grad-CAM attention** (center-of-mass, 0=center): fakes pull attention to the
+  face interior (Celeb-DF 0.32, FF++ 0.22) while real frames scatter (0.09) —
+  the detector keys on manipulated facial content, not borders/compression.
+
+### ⚠️ Two integrity issues found & fixed (documented for reproducibility)
+
+1. **Split leakage in the Kaggle mirror.** The mirror's provided train/val/test
+   CSVs leaked **124 val + 78 test videos into train**. We enforce video-level
+   disjoint splits in `prepare_data.py` (dropped 1,044 leaked train rows).
+2. **Frame-count shortcut.** In this mirror, real clips have 12 frames but fakes
+   only 2–3, so a temporal model can score a fake-perfect 1.0 AUC by *counting
+   frames*. We add a **length-control protocol** (`--max-frames T`) that
+   subsamples every clip to exactly T frames and drops shorter ones, and a
+   runtime warning when the shortcut is detected. All temporal numbers above use
+   T=2.
 
 ## Architecture
 
@@ -80,16 +131,25 @@ Deepfakes/ Face2Face/ FaceSwap/ ...   → label 1 (generator=<dir name>)
 ## Train
 
 ```bash
+# 0. build leak-free, video-disjoint splits from the Kaggle mirror
+python -m deepfake_detection.prepare_data
+
 # 1. spatial detector (frame-level)
 python -m deepfake_detection.train_spatial --config configs/spatial.yaml
+# fine-tune from the head-only checkpoint on a balanced subset (CPU-friendly)
+python -m deepfake_detection.train_spatial --config configs/spatial.yaml \
+    --resume checkpoints/spatial_effb0.pt --finetune-only --epochs 2 --balance 5000
 
-# 2. temporal: cache embeddings, then train transformer
-python -m deepfake_detection.train_temporal embed
-python -m deepfake_detection.train_temporal train
+# 2. temporal: cache embeddings, then train transformer with length control
+python -m deepfake_detection.train_temporal embed --config configs/temporal.yaml
+python -m deepfake_detection.train_temporal train --config configs/temporal.yaml --max-frames 2
 
-# 3. research analyses
-python -m deepfake_detection.analyze_generalization --data-root data/processed
-python -m deepfake_detection.analyze_artifacts --data-root data/processed
+# 3. benchmark + research analyses
+python -m deepfake_detection.benchmark --split test --max-frames 2
+python -m deepfake_detection.analyze_generalization --config configs/spatial.yaml \
+    --ckpt checkpoints/spatial_effb0.pt --data-root data/processed --split test
+python -m deepfake_detection.analyze_artifacts --data-root data/processed/test \
+    --ckpt checkpoints/spatial_effb0.pt
 ```
 
 ## Inference
