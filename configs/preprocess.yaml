@@ -1,0 +1,13 @@
+# Celeb-DF v2 preprocessing config
+dataset: celebdf
+raw_root: data/raw          # contains Celeb-real/ and Celeb-synthesis/
+out_root: data/processed    # face crops land here
+test_list: data/List_of_testing_videos.txt  # official 518-video test split
+
+frames_per_video: 16        # evenly sampled frames per video
+img_size: 224
+face_margin: 0.35           # expand face box by this fraction on each side
+min_face: 40                # min face box px, else fall back to center crop
+jpeg_quality: 95
+workers: 8
+overwrite: false

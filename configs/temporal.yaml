@@ -1,0 +1,22 @@
+# Temporal transformer over frozen spatial embeddings
+embed:
+  spatial_ckpt: checkpoints/spatial_effb0.pt
+  backbone: efficientnet_b0
+  frames_per_video: 16
+  cache_dir: data/embeddings   # .npy cache of (T, D) per video
+
+model:
+  dim: 256            # project backbone emb (1280) -> dim
+  depth: 3
+  heads: 4
+  mlp_ratio: 2.0
+  dropout: 0.1
+  pool: attention     # attention | mean | max
+
+train:
+  epochs: 30
+  batch_size: 32      # videos
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  seed: 42
+  ckpt: checkpoints/temporal_transformer.pt

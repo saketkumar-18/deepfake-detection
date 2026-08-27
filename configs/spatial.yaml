@@ -1,0 +1,27 @@
+# Spatial detector: EfficientNet-B0 on face crops
+model:
+  backbone: efficientnet_b0
+  pretrained: true
+  num_classes: 1            # single logit, BCE
+  drop_rate: 0.3
+
+data:
+  processed_root: data/processed
+  img_size: 224
+  frames_per_video: 16
+  train_videos_per_class: 250   # cap for CPU budget (real is scarce: 590 total)
+  batch_size: 32
+  workers: 4
+
+train:
+  epochs_head: 1
+  epochs_finetune: 3
+  lr_head: 1.0e-3
+  lr_finetune: 3.0e-5
+  weight_decay: 1.0e-4
+  num_threads: 16
+  seed: 42
+  ckpt: checkpoints/spatial_effb0.pt
+
+eval:
+  batch_size: 64
