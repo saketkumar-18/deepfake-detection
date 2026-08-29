@@ -1,13 +1,18 @@
 /**
  * main.js — orchestrates upload → frame sampling → face detection → scoring → verdict.
+ * Plus: audio-track decoding + synthetic-speech scoring, fused with the visual branch.
  * Everything runs on-device; no network calls except model/CDN fetches.
  */
 import { DeepfakeScreener } from "./inference.js";
 import { getFaceDetector, cropLargestFace } from "./facedetect.js";
+import { AudioForensics } from "./audio.js";
+import { fuse, verdict as verdictOf } from "./fusion.js";
+import * as ort from "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.19.2/dist/ort.bundle.min.mjs";
 
 const NUM_FRAMES = 16;
 
 const screener = new DeepfakeScreener();
+const audioForensics = new AudioForensics();
 let faceDetector = null;
 
 const $ = (id) => document.getElementById(id);
@@ -34,6 +39,33 @@ function setStatus(text, frac) {
 function hideStatus() {
   statusCard.hidden = true;
 }
+
+// ---------- built-in samples ----------
+const SAMPLES = [
+  { file: "samples/sample_real_video_natural_voice.mp4", label: "✅ Real face · real voice" },
+  { file: "samples/sample_fake_video_natural_voice.mp4", label: "🚨 Fake face · real voice" },
+  { file: "samples/sample_real_video_synthetic_voice.mp4", label: "⚠️ Real face · synthetic voice" },
+  { file: "samples/sample_fake_video_synthetic_voice.mp4", label: "🚨 Fake face · synthetic voice" },
+];
+async function loadSample(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`sample not found (${res.status})`);
+    const blob = await res.blob();
+    const name = url.split("/").pop();
+    const file = new File([blob], name, { type: blob.type || "video/mp4" });
+    handleFile(file);
+  } catch (e) {
+    setStatus(`Could not load sample: ${e.message}`, 0);
+  }
+}
+SAMPLES.forEach((s) => {
+  const btn = document.createElement("button");
+  btn.className = "sample-btn";
+  btn.textContent = s.label;
+  btn.addEventListener("click", () => loadSample(s.file));
+  $("sampleBtns").appendChild(btn);
+});
 
 // ---------- upload wiring ----------
 dropzone.addEventListener("click", () => fileInput.click());
@@ -115,11 +147,22 @@ async function handleFile(file) {
     for (let i = 0; i < crops.length; i++) {
       const s = await screener.scoreCrop(crops[i]);
       scores.push(s);
-      setStatus(`Scoring face crops… ${i + 1}/${crops.length}`, 0.65 + 0.3 * ((i + 1) / crops.length));
+      setStatus(`Scoring face crops… ${i + 1}/${crops.length}`, 0.65 + 0.2 * ((i + 1) / crops.length));
     }
 
     const videoScore = scores.reduce((a, b) => a + b, 0) / scores.length;
-    renderResult(videoScore, scores, cropMeta, frames.length);
+
+    // ---- audio branch: decode the video's own audio track & score it ----
+    setStatus("Analyzing audio track…", 0.9);
+    let audioResult = null;
+    try {
+      audioResult = await audioForensics.analyze(ort, file, (msg, f) => setStatus(msg, f));
+    } catch (e) {
+      audioResult = null; // audio is best-effort; never block the visual verdict
+    }
+
+    const fused = fuse(videoScore, audioResult ? audioResult.prob : null);
+    renderResult(fused, videoScore, audioResult, scores, cropMeta, frames.length);
     hideStatus();
   } catch (err) {
     hideStatus();
@@ -181,27 +224,32 @@ function seekTo(video, t) {
   });
 }
 
-function renderResult(videoScore, scores, cropMeta, totalFrames) {
-  const pct = (videoScore * 100).toFixed(1);
-  scoreValue.textContent = `${pct}%`;
-  scoreFill.style.width = `${Math.max(2, videoScore * 100)}%`;
+function renderResult(fused, videoScore, audioResult, scores, cropMeta, totalFrames) {
+  const videoScorePct = (fused.prob * 100).toFixed(1);
+  scoreValue.textContent = `${videoScorePct}%`;
+  scoreFill.style.width = `${Math.max(2, fused.prob * 100)}%`;
 
-  let verdict, cls, emoji;
-  if (videoScore >= 0.75) { verdict = "LIKELY FAKE"; cls = "fake"; emoji = "🚨"; }
-  else if (videoScore >= 0.5) { verdict = "SUSPICIOUS"; cls = "suspicious"; emoji = "⚠️"; }
-  else if (videoScore >= 0.25) { verdict = "UNCERTAIN"; cls = "uncertain"; emoji = "❓"; }
-  else { verdict = "LIKELY REAL"; cls = "real"; emoji = "✅"; }
-  verdictEl.textContent = `${emoji} ${verdict}`;
+  const v = verdictOf(fused.prob);
+  const emoji = { bad: "🚨", warn: "⚠️", good: "✅" }[v.tone];
+  const cls = { bad: "fake", warn: "suspicious", good: "real" }[v.tone];
+  verdictEl.textContent = `${emoji} ${v.label}`;
   verdictEl.className = `verdict ${cls}`;
 
   const hi = scores.filter((s) => s >= 0.5).length;
+  const audioRow = audioResult
+    ? `<div class="row"><span>Audio: synthetic-voice score</span><b>${(audioResult.prob * 100).toFixed(1)}% (${audioResult.nSegments} segment${audioResult.nSegments > 1 ? "s" : ""}, ${audioResult.msPerSeg.toFixed(0)} ms/seg)</b></div>`
+    : `<div class="row"><span>Audio: synthetic-voice score</span><b>no audio track</b></div>`;
+  const visRow = `<div class="row"><span>Visual: face-forgery score</span><b>${(videoScore * 100).toFixed(1)}%</b></div>`;
   detailRows.innerHTML = `
+    ${visRow}
+    ${audioRow}
+    <div class="row"><span>Fusion</span><b>${fused.mode}${fused.note ? " · " + fused.note : ""}</b></div>
     <div class="row"><span>Frames sampled</span><b>${totalFrames}</b></div>
     <div class="row"><span>Faces scored</span><b>${scores.length}</b></div>
     <div class="row"><span>Frames ≥ 0.5 fake</span><b>${hi} / ${scores.length}</b></div>
     <div class="row"><span>Min / max frame score</span><b>${Math.min(...scores).toFixed(3)} / ${Math.max(...scores).toFixed(3)}</b></div>
     <div class="row"><span>Aggregation</span><b>mean-pool (best in benchmark)</b></div>
-    <div class="row"><span>Model</span><b>EfficientNet-B0 · fp16 · on-device</b></div>
+    <div class="row"><span>Models</span><b>EfficientNet-B0 (visual) · 1D-CNN (audio) · on-device</b></div>
   `;
 
   // per-frame chips

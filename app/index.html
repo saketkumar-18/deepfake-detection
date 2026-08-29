@@ -41,6 +41,10 @@
         <p class="dz-hint">Short clips (&lt;60s) with a visible face work best · MP4/WebM</p>
       </div>
     </div>
+    <div class="samples">
+      <p class="samples-label">…or try a built-in sample:</p>
+      <div class="sample-btns" id="sampleBtns"></div>
+    </div>
   </section>
 
   <!-- ============ MODEL LOAD STATUS ============ -->
@@ -79,7 +83,8 @@
     <ol class="how-steps">
       <li><strong>Sample</strong> — 16 evenly-spaced frames are decoded from your video.</li>
       <li><strong>Detect</strong> — a BlazeFace model (MediaPipe, also on-device) locates the largest face in each frame.</li>
-      <li><strong>Score</strong> — each face crop runs through an EfficientNet-B0 detector (fp16 ONNX, 8&nbsp;MB) in WebAssembly.</li>
+      <li><strong>Hear</strong> — the video's audio track is decoded in-browser and scored by a 1D-CNN trained to detect synthetic speech (TTS/voice-clone artifacts).</li>
+      <li><strong>Fuse</strong> — visual and audio branches combine into the final verdict. Everything stays on your device.</li>
       <li><strong>Aggregate</strong> — frame scores are mean-pooled into a video-level verdict (the aggregation that scored best in our benchmark: AUC 0.9553 vs 0.9456 for the temporal transformer).</li>
     </ol>
     <p class="how-note">

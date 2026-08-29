@@ -13,3 +13,9 @@ build/
 logs_*.txt
 *.stackdump
 orttest/
+orttest/
+report_build/*.log
+report_build/*.aux
+report_build/*.out
+report_build/WhatsApp*
+sample video/

@@ -73,6 +73,36 @@ main { max-width: 980px; margin: 0 auto; padding: 26px 20px 60px; }
 }
 
 /* dropzone */
+.samples {
+  margin-top: 14px;
+  border-top: 1px solid var(--card-border);
+  padding-top: 12px;
+}
+.samples-label {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.sample-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sample-btn {
+  background: var(--card);
+  color: var(--fg);
+  border: 1px solid var(--card-border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.sample-btn:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+
 .dropzone {
   border: 2px dashed #2c3648;
   border-radius: var(--radius);
