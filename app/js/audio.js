@@ -74,7 +74,10 @@ export class AudioForensics {
 
   /**
    * Full audio analysis: decode -> segment -> score.
-   * Returns { prob, nSegments, ms } or null if the video has no audio track.
+   * Includes a speech-domain guard: music/bass-heavy or non-speech content
+   * (zero-crossing rate far outside speech range) makes the branch abstain —
+   * the model only knows speech, and scoring non-speech would be dishonest.
+   * Returns { prob, nSegments, ms } or null (no audio / not speech).
    */
   async analyze(ort, videoBlob, onProgress) {
     await this.init(ort, onProgress);
@@ -83,6 +86,14 @@ export class AudioForensics {
       x = await this.decode(videoBlob);
     } catch (e) {
       return null; // silent video — audio branch abstains
+    }
+    // speech-domain guard: ZCR of speech is ~0.02-0.4 at 16 kHz mono;
+    // music/bass-dominant content sits < 0.015, pure noise > 0.45.
+    let crossings = 0;
+    for (let i = 1; i < x.length; i++) if ((x[i] >= 0) !== (x[i - 1] >= 0)) crossings++;
+    const zcr = crossings / (x.length - 1);
+    if (zcr < 0.015 || zcr > 0.45) {
+      return { prob: null, nSegments: 0, msPerSeg: 0, abstained: true, zcr: zcr };
     }
     const segs = this.segments(x);
     if (!segs.length) return null;
@@ -97,8 +108,8 @@ export class AudioForensics {
       const view = big.data;
       for (let b = 0; b < batch.length; b++) view.set(batch[b], b * segs[0].length);
       const res = await this.session.run({ [this.inputName]: big });
-      const out = res[this.outputName].data; // (B,1) fake logits
-      for (let b = 0; b < batch.length; b++) probs.push(1 / (1 + Math.exp(-out[b * (out.length / batch.length)])));
+      const out = res[this.outputName].data; // (B,1) calibrated fake probabilities
+      for (let b = 0; b < batch.length; b++) probs.push(out[b]);
     }
     const ms = (performance.now() - t0) / segs.length;
     return { prob: probs.reduce((a, b) => a + b, 0) / probs.length, nSegments: segs.length, msPerSeg: ms };

@@ -161,7 +161,7 @@ async function handleFile(file) {
       audioResult = null; // audio is best-effort; never block the visual verdict
     }
 
-    const fused = fuse(videoScore, audioResult ? audioResult.prob : null);
+    const fused = fuse(videoScore, audioResult && !audioResult.abstained ? audioResult.prob : null);
     renderResult(fused, videoScore, audioResult, scores, cropMeta, frames.length);
     hideStatus();
   } catch (err) {
@@ -237,7 +237,9 @@ function renderResult(fused, videoScore, audioResult, scores, cropMeta, totalFra
 
   const hi = scores.filter((s) => s >= 0.5).length;
   const audioRow = audioResult
-    ? `<div class="row"><span>Audio: synthetic-voice score</span><b>${(audioResult.prob * 100).toFixed(1)}% (${audioResult.nSegments} segment${audioResult.nSegments > 1 ? "s" : ""}, ${audioResult.msPerSeg.toFixed(0)} ms/seg)</b></div>`
+    ? audioResult.abstained
+      ? `<div class="row"><span>Audio: synthetic-voice score</span><b>abstained — non-speech content detected</b></div>`
+      : `<div class="row"><span>Audio: synthetic-voice score</span><b>${(audioResult.prob * 100).toFixed(1)}% (${audioResult.nSegments} segment${audioResult.nSegments > 1 ? "s" : ""}, ${audioResult.msPerSeg.toFixed(0)} ms/seg)</b></div>`
     : `<div class="row"><span>Audio: synthetic-voice score</span><b>no audio track</b></div>`;
   const visRow = `<div class="row"><span>Visual: face-forgery score</span><b>${(videoScore * 100).toFixed(1)}%</b></div>`;
   detailRows.innerHTML = `

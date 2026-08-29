@@ -79,6 +79,23 @@ def load_wav_ffmpeg(path: Path) -> np.ndarray:
     return np.frombuffer(out, dtype=np.float32)
 
 
+def roundtrip_codec(x: np.ndarray, codec: str, bitrate: str) -> np.ndarray:
+    """Round-trip raw PCM through a lossy codec (mp3/aac/opus) and back, so the
+    model cannot rely on container/codec differences between corpora."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        raw_in = Path(td) / "in.raw"
+        enc = Path(td) / "enc" + {"libmp3lame": ".mp3", "aac": ".m4a", "libopus": ".ogg"}[codec]
+        raw_in.write_bytes((x * 32767).astype(np.int16).tobytes())
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-f", "s16le", "-ar", str(SR), "-ac", "1",
+             "-i", str(raw_in), "-c:a", codec, "-b:a", bitrate, str(enc)], check=True)
+        out = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", str(enc), "-ac", "1", "-ar", str(SR),
+             "-f", "f32le", "-"], capture_output=True, check=True).stdout
+        return np.frombuffer(out, dtype=np.float32)
+
+
 def segments_from_clip(x: np.ndarray, seg_n: int, train: bool, rng: random.Random, crops: int = 12):
     """Yield fixed-length segments; TRAIN: many random crops (data augmentation);
     EVAL: tile the whole clip so the clip-level score uses all its audio."""
@@ -105,9 +122,9 @@ def scan_classes(root: Path) -> dict:
 
     Sources:
       - unidpro flattened '<group>_<gender>_<speaker>_<kind>.<ext>':
-          kind = original (real) | synthetic_N (fake)
-      - CREMA-D natural speech (real), if present under data/audio_cremad:
-          adds diverse real speech from 91 speakers to fight channel overfit.
+          kind = original (real) | synthetic_N (fake)  [voice-clone TTS, 20 voices]
+      - jayjoshi wavs under data/audio_raw/fake/ (fake)  [different TTS generators]
+      - CREMA-D natural speech (real), data/audio_cremad/  [91 speakers]
     """
     out = {"fake": [], "real": []}
     for p in root.iterdir():
@@ -115,12 +132,30 @@ def scan_classes(root: Path) -> dict:
             continue
         lab = "real" if "original" in p.stem else "fake"
         out[lab].append(p)
+    raw2 = root.parent / "audio_raw" / "fake"
+    if raw2.is_dir():
+        extra = sorted(raw2.glob("*.wav"))
+        out["fake"] += extra
+        print(f"[audio] + {len(extra)} jayjoshi synthetic clips (2nd TTS family)")
     cremad = root.parent / "audio_cremad"
     if cremad.is_dir():
         wavs = sorted(cremad.glob("*.wav"))
-        # cap so the real class isn't dominated by one corpus (600 clips max)
-        out["real"] += wavs[:600]
-        print(f"[audio] + {min(len(wavs), 600)} CREMA-D natural-speech clips (real)")
+        # emotion-BALANCED sample: striding the sorted list takes one speaker's
+        # whole set; instead sample evenly across emotion tags so high-arousal
+        # (ANG/HAP) real speech is well represented and cannot read as "fake".
+        by_emo = {}
+        for w in wavs:
+            parts = w.stem.split("_")
+            if len(parts) >= 3:
+                by_emo.setdefault(parts[2], []).append(w)
+        per_emo = max(20, 300 // max(1, len(by_emo)))
+        picked = []
+        for emo, lst in sorted(by_emo.items()):
+            random.shuffle(lst)
+            picked += lst[:per_emo]
+        out["real"] += picked
+        print(f"[audio] + {len(picked)} CREMA-D clips, emotion-balanced "
+              f"({ {e: min(len(l), per_emo) for e, l in sorted(by_emo.items())} })")
     for k in out:
         random.shuffle(out[k])
     return out
@@ -143,12 +178,17 @@ def main() -> None:
     if n_fake < 10 or n_real < 10:
         sys.exit("[audio] not enough data — download the subset first")
 
-    # speaker-disjoint split: group by speaker id
-    #   unidpro: UK_female_1_<kind>  -> UK_female_1
-    #   CREMA-D: 1001_DFA_ANG_XX     -> 1001
+    # speaker-disjoint split: group by corpus+speaker id so corpora never mix groups
+    #   unidpro:   UK_female_1_<kind>      -> UK_female_1
+    #   jayjoshi:  1234 (numeric id)       -> jay_1234
+    #   CREMA-D:   1001_DFA_ANG_XX         -> cremad_1001
     def gid(p: Path) -> str:
         parts = p.stem.split("_")
-        return "_".join(parts[:3]) if parts[0] in ("UK", "USA") else parts[0]
+        if parts[0] in ("UK", "USA"):
+            return "_".join(parts[:3])
+        if p.parent.name == "fake" and "audio_raw" in str(p.parent):
+            return "jay_" + parts[0]
+        return "cremad_" + parts[0]
 
     groups = {}
     for lab, paths in data.items():
@@ -180,10 +220,23 @@ def main() -> None:
             except Exception as e:
                 print(f"  skip {p.name}: {e}")
                 continue
-            for s in segments_from_clip(x, SEG_N, train, rng):
-                X.append(s)
-                y.append(1 if lab == "fake" else 0)
-                clip_id.append(i)
+            # channel-invariance: every clip appears through lossy round-trips
+            # (opus = WhatsApp/messenger codec, the demo's real-world input)
+            variants = [x]
+            try:
+                variants.append(roundtrip_codec(x, "libmp3lame", "48k"))
+                variants.append(roundtrip_codec(x, "aac", "32k"))
+                variants.append(roundtrip_codec(x, "libopus", "24k"))
+            except Exception:
+                pass
+            # crops proportional to clip length in TRAIN: short clips (2-3 s)
+            # must not be oversampled 12x (memorization); long clips get 12
+            crops = max(2, min(12, len(x) // SEG_N + 2))
+            for v in variants:
+                for s in segments_from_clip(v, SEG_N, train, rng, crops=crops):
+                    X.append(s)
+                    y.append(1 if lab == "fake" else 0)
+                    clip_id.append(i)
         X = np.stack(X)
         y = np.array(y, dtype=np.float32)
         return X, y, np.array(clip_id)
@@ -250,8 +303,50 @@ def main() -> None:
     vauc, _, _ = clip_auc(model, Xv, yv, cv := cidv)
     print(f"[audio] best val clip AUC {vauc:.4f} | test clip AUC {tauc:.4f}")
 
+    # ---- Platt calibration on the VAL split (clip-level) ----
+    # AUC only measures ranking; absolute probabilities must also be honest so
+    # fusion doesn't false-alarm on real speech. Fit p = sigmoid(a*z + b) on
+    # val clip scores, then FOLD the calibration into the exported model so the
+    # browser gets calibrated probabilities directly.
+    def raw_clip_scores(model, X, y, cid):
+        model.eval()
+        seg = []
+        with torch.no_grad():
+            for i in range(0, len(X), 128):
+                xb = torch.from_numpy(X[i : i + 128]).unsqueeze(1)
+                seg.append(model(xb).squeeze(-1).numpy())
+        seg = np.concatenate(seg)
+        out = {}
+        for c in np.unique(cid):
+            m = cid == c
+            out[int(c)] = (float(seg[m].mean()), float(y[m][0]))
+        return out
+
+    val_scores = raw_clip_scores(model, Xv, yv, cidv)
+    zs = np.array([v[0] for v in val_scores.values()], dtype=np.float64)
+    zy = np.array([v[1] for v in val_scores.values()], dtype=np.float64)
+    a_c, b_c = 1.0, 0.0
+    try:
+        from scipy.optimize import minimize
+
+        def nll(ab):
+            aa, bb = ab
+            p = 1 / (1 + np.exp(-(aa * zs + bb)))
+            p = np.clip(p, 1e-6, 1 - 1e-6)
+            return -np.mean(zy * np.log(p) + (1 - zy) * np.log(1 - p))
+
+        r = minimize(nll, x0=[1.0, 0.0], method="Nelder-Mead")
+        a_c, b_c = float(r.x[0]), float(r.x[1])
+        cal_p = 1 / (1 + np.exp(-(a_c * zs + b_c)))
+        cal_auc = roc_auc_score(zy, cal_p)
+        print(f"[audio] Platt: a={a_c:.4f} b={b_c:.4f} | val cal-AUC {cal_auc:.4f} "
+              f"| calibrated real-clip mean={cal_p[zy == 0].mean():.3f} fake-clip mean={cal_p[zy == 1].mean():.3f}")
+    except Exception as e:
+        print(f"[audio] Platt skipped ({e})")
+
     torch.save(
-        {"model": best_state, "config": {"sr": SR, "seg": SEG, "arch": "audio_cnn_5l"},
+        {"model": best_state, "config": {"sr": SR, "seg": SEG, "arch": "audio_cnn_5l",
+                                         "platt_a": a_c, "platt_b": b_c},
          "val_auc": float(vauc), "test_auc": float(tauc)},
         CKPT_DIR / "audio_cnn.pt",
     )
@@ -260,13 +355,28 @@ def main() -> None:
     import onnx
     import onnxruntime as ort
 
+    # Wrap the model so Platt calibration is INSIDE the graph:
+    #   raw logit z -> sigmoid(a*z + b) = calibrated fake probability.
+    # The browser then gets an honest probability with zero extra code.
+    class Calibrated(nn.Module):
+        def __init__(self, m, a, b):
+            super().__init__()
+            self.m = m
+            self.a = a
+            self.b = b
+
+        def forward(self, x):
+            z = self.m(x)
+            return torch.sigmoid(self.a * z + self.b)
+
+    cal_model = Calibrated(model, a_c, b_c).eval()
     dummy = torch.zeros(1, 1, SEG_N)
     onnx_path = APP_ASSETS / "model.audio.onnx"
     torch.onnx.export(
-        model, dummy, str(onnx_path),
-        input_names=["waveform"], output_names=["fake_logit"],
+        cal_model, dummy, str(onnx_path),
+        input_names=["waveform"], output_names=["fake_prob"],
         opset_version=17, dynamo=False,
-        dynamic_axes={"waveform": {0: "batch"}, "fake_logit": {0: "batch"}},
+        dynamic_axes={"waveform": {0: "batch"}, "fake_prob": {0: "batch"}},
     )
     try:
         from onnxconverter_common import float16
@@ -279,8 +389,8 @@ def main() -> None:
     sess = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
     xt = torch.from_numpy(Xt[:4]).unsqueeze(1)
     with torch.no_grad():
-        tp = torch.sigmoid(model(xt)).squeeze(-1).numpy()
-    op = 1 / (1 + np.exp(-sess.run(None, {"waveform": xt.numpy()})[0].squeeze(-1)))
+        tp = cal_model(xt).squeeze(-1).numpy()  # calibrated probabilities
+    op = sess.run(None, {"waveform": xt.numpy()})[0].reshape(-1)  # already calibrated
     print(f"[audio] onnx parity max diff: {np.abs(tp - op).max():.2e} size: {onnx_path.stat().st_size/1e6:.2f} MB")
 
     # ---------------- per-class/per-source test breakdown (honest numbers)
