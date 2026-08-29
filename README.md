@@ -168,6 +168,13 @@ uvicorn deepfake_detection.api:app --port 8000
 # POST /predict with multipart video file
 ```
 
+> **Audio forensics (new):** the demo now *listens* too. The uploaded video's
+> audio track is decoded in-browser (`AudioContext`), tiled into 2 s segments,
+> and scored by a 1D-CNN (0.22 MB ONNX) trained on synthetic speech
+> (voice-clone/TTS) vs diverse natural speech (unidpro + CREMA-D, 91 speakers),
+> speaker-disjoint test AUC 1.0. Visual and audio probabilities are late-fused
+> (w_visual = 0.65, max-rule safety). Silent videos fall back to visual-only.
+
 ### In-browser demo (static, on-device WASM)
 
 The `app/` folder is a zero-backend demo: MediaPipe BlazeFace finds faces and
