@@ -1,21 +1,28 @@
-.venv/
+# Python
 __pycache__/
 *.pyc
 *.egg-info/
-data/
-checkpoints/
-reports/
-*.pt
-*.npz
 .pytest_cache/
+.venv/
 dist/
 build/
+
+# Data & training artifacts (large, rebuildable)
+data/
+checkpoints/
+reports/*
+!reports/REPORT.md
+*.pt
+*.npz
 logs_*.txt
 *.stackdump
-orttest/
-orttest/
-report_build/*.log
-report_build/*.aux
-report_build/*.out
-report_build/WhatsApp*
+
+# Local scratch / test media
+report_build/
 sample video/
+orttest/
+
+# Deploy state & secrets (never commit)
+.vercel/
+.env
+.env.*
